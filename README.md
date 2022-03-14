@@ -32,8 +32,11 @@ serial-mqtt:
   module: serial-mqtt
   class: SerialMqtt
   DEBUG: 1
+  serial_port: "/dev/serial/by-id/usb-1a86_USB2.0-Ser_-if00-port0"
   state_topic: "serial-mqtt/state"
   command_topic: "serial-mqtt/command"
+  init_topic: "serial-mqtt/init"
+  init_commands: ["AT+R1","AT+R2","AT+R3","AT+R4","AT+R5","AT+R6","AT+R7","AT+R8","AT+R9","AT+RA","AT+RB","AT+RC","AT+RD","AT+RE","AT+RF","AT+RG"]
 ```
 
 ### Parameters
@@ -42,8 +45,12 @@ serial-mqtt:
 | `module` | Yes | Always `rs232-relay-mqtt`
 | `class` | Yes | Always `Rs232RelayMqtt`
 | `DEBUG` | Yes | Flag that allow to log debug messages
+| `serial_port` | Yes | Path to serial device
 | `state_topic` | Yes | State topic where answer from serial is send in payload
 | `command_topic` | Yes | Command toppic where app is listening, payload is send to serial device
+| `serial_port` | Yes | Path to serial device
+| `init_topic` | Yes | Init topic, when topic is called `init_commands` are executed
+| `init_commands` | Yes | Initial commands are executed when app is initialized or `init_topic` is published
 
 ## MQTT sensor definition
 ```yaml

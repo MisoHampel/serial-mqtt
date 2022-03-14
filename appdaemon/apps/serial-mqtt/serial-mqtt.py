@@ -4,7 +4,7 @@ import asyncio
 import queue
 import mqttapi as mqtt
 
-commands = queue.LifoQueue()
+commands = queue.Queue()
 
 
 class Context:
@@ -24,24 +24,18 @@ class SerialMqtt(mqtt.Mqtt, hass.Hass):
             topic=command_topic,
             namespace="mqtt",
         )
+        self.listen_event(
+            self.mqtt_init_callback,
+            event="MQTT_MESSAGE",
+            topic=self.args["init_topic"],
+            namespace="mqtt",
+        )
 
-        try:
-            if Context.serial_port == None:
-                self.debug("MQTT: -> open serial ... ")
-                Context.serial_port = serial.Serial(
-                    port="/dev/serial/by-id/usb-1a86_USB2.0-Ser_-if00-port0",  # /dev/ttyUSB0
-                    baudrate=9600,  # 9600 bauds
-                    bytesize=serial.EIGHTBITS,  # 7bits
-                    parity=serial.PARITY_NONE,  # even parity
-                    stopbits=serial.STOPBITS_ONE,  # 1 stop bit
-                    xonxoff=False,  # no flow control
-                    timeout=1,
-                )
+        for init_command in self.args["init_commands"]:
+            commands.put(str(init_command))
 
-            self.debug("Serial is opened: " + Context.serial_port.name)
-            await self.run_in(self.serial_read_loop, 2)
-        except Exception as e:
-            self.debug("Open serial ERROR " + str(e))
+        await self.connect_serial()
+        await self.run_in(self.serial_read_loop, 2)
 
     # -------------------------------------------------------
 
@@ -49,26 +43,61 @@ class SerialMqtt(mqtt.Mqtt, hass.Hass):
         # do some async stuff
         state_topic = self.args["state_topic"]
         while True:
-            await asyncio.sleep(0.2)  # Time to yield in seconds. Use a shorter time if needed, i.e. 0.1.
-            if Context.serial_port != None:
-                if Context.serial_port.isOpen():
-                    if not commands.empty():
-                        command = commands.get()
-                        self.debug("Sending command to realy board: " + command)
-                        Context.serial_port.write(bytes(command, "ascii"))
-                    try:
-                        # read
-                        doc = Context.serial_port.readline()
-                        if len(doc) > 2:
-                            received = str(doc.decode("ascii")).strip()
-                            self.debug("Serial answer " + received)
-                            self.mqtt_publish(state_topic, received, retain=True)
-                    except Exception as e:
-                        self.debug("Error : try to parse an incomplete message")
-                        pass
+            await asyncio.sleep(0.1)  # Time to yield in seconds. Use a shorter time if needed, i.e. 0.1.
+            if not Context.serial_port == None and Context.serial_port.isOpen():
+                if not commands.empty():
+                    command = commands.get()
+                    self.debug("Sending command to realy board: " + command)
+                    Context.serial_port.write(bytes(command, "ascii"))
+                try:
+                    # read
+                    doc = Context.serial_port.readline()
+                    if len(doc) > 2:
+                        received = str(doc.decode("ascii")).strip()
+                        self.debug("Serial answer " + received)
+                        self.mqtt_publish(state_topic, received, retain=True)
+                except Exception as e:
+                    self.debug("Error : try to parse an incomplete message")
+                    pass
                 #   Context.serial_port.flush()
+            else:
+                if Context.serial_port != None:
+                    Context.serial_port.close()
+                    self.debug("Error - serial closed ")
+                self.connect_serial()
+
+    # ----------------------------------------------------
+    async def connect_serial(self):
+        connected = False
+        while not connected:
+            try:
+                if Context.serial_port == None:
+                    self.debug("Trying to open serial ... ")
+                    Context.serial_port = serial.Serial(
+                        port=self.args["serial_port"],  # /dev/ttyUSB0
+                        baudrate=9600,  # 9600 bauds
+                        bytesize=serial.EIGHTBITS,  # 7bits
+                        parity=serial.PARITY_NONE,  # even parity
+                        stopbits=serial.STOPBITS_ONE,  # 1 stop bit
+                        xonxoff=False,  # no flow control
+                        timeout=1,
+                    )
+                    self.debug("Serial is opened: " + Context.serial_port.name)
+                    connected = True
+                    continue
+                elif Context.serial_port.isOpen():
+                    connected = True
+                    continue
                 else:
                     self.debug("Error - serial closed ")
+                    Context.serial_port.close()
+                    Context.serial_port = None
+                    connected = False
+            except Exception as e:
+                self.debug("Open serial ERROR " + str(e))
+                connected = False
+            if not connected:
+                await asyncio.sleep(2)
 
     # ----------------------------------------------------
     def terminate(self):
@@ -89,6 +118,11 @@ class SerialMqtt(mqtt.Mqtt, hass.Hass):
 
         self.debug("MQTT: topic " + topic + ", payload (command) " + payload)
         commands.put(payload)
+        
+    def mqtt_init_callback(self, event, event_data, kwargs):
+        self.debug("MQTT-mqtt_init_callback")
+        for init_command in self.args["init_commands"]:
+            commands.put(str(init_command))
 
     # ----------------------------------------------------
     def debug(self, text):
